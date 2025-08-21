@@ -1,5 +1,6 @@
-````markdown
-__Proximal Policy Optimization with Adaptive GAE and Policy Update Delay__
+# Proximal Policy Optimization with Adaptive Generalized Advantage Estimate: Critic-Aware Refinements  
+
+
 
 This repository contains the official PyTorch implementation of our paper:
 
@@ -57,7 +58,7 @@ Key findings:
 - In HalfCheetah-v4, critic instability limits λ’s adaptiveness.  
 
 
-````
+
 ## Installation
 
 Use the requirements from this repo:
@@ -77,7 +78,7 @@ Run training with default settings (Humanoid-v4, 2M timesteps):
 python ppo_adaptive.py
 ```
 
-Custom runs:
+## Custom runs
 
 ```bash
 # Run Ant-v4 for 4M timesteps
