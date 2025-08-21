@@ -83,11 +83,6 @@ python ppo_adaptive_gae.py
 # Run Ant-v4 for 4M timesteps
 python ppo_adaptive_gae.py --env_id Ant-v4 --total_timesteps 4000000  
 
-# Save trained model
-python ppo_adaptive_gae.py --save_model True  
-
-# Enable TensorBoard logging
-tensorboard --logdir runs
 ```
 
 ---
