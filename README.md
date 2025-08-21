@@ -74,17 +74,17 @@ pip install -r requirements.txt
 Run training with default settings (Humanoid-v4, 2M timesteps):
 
 ```bash
-python ppo_adaptive.py
+python ppo_adaptive_gae.py
 ```
 
 ## Custom runs
 
 ```bash
 # Run Ant-v4 for 4M timesteps
-python ppo_adaptive.py --env_id Ant-v4 --total_timesteps 4000000  
+python ppo_adaptive_gae.py --env_id Ant-v4 --total_timesteps 4000000  
 
 # Save trained model
-python ppo_adaptive.py --save_model True  
+python ppo_adaptive_gae.py --save_model True  
 
 # Enable TensorBoard logging
 tensorboard --logdir runs
