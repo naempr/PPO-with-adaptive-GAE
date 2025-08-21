@@ -11,7 +11,9 @@ Amirkabir University of Technology (AUT), 2025
 
 ## Overview
 
-Proximal Policy Optimization (PPO) is one of the most widely used reinforcement learning (RL) algorithms due to its balance of stability and learning efficiency. However, PPO is highly sensitive to hyperparameters such as λ in Generalized Advantage Estimation (GAE), which manages the bias-variance trade-off.
+Proximal Policy Optimization (PPO) is one of the most widely used reinforcement learning (RL) algorithms
+due to its balance of stability and learning efficiency.However, PPO is highly sensitive to hyperparameters
+such as λ in Generalized Advantage Estimation (GAE), which manages the bias-variance trade-off.
 
 In this project, we propose two refinements:
 
