@@ -1,5 +1,5 @@
 ````markdown
-# Proximal Policy Optimization with Adaptive GAE and Policy Update Delay
+__Proximal Policy Optimization with Adaptive GAE and Policy Update Delay__
 
 This repository contains the official PyTorch implementation of our paper:
 
