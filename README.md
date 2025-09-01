@@ -114,18 +114,7 @@ Metrics tracked with TensorBoard:
 
 ---
 
-## Citation
 
-If you use this code, please cite our work:
-
-```bibtex
-@article{mohammadpour2025ppo,
-  title={Proximal Policy Optimization with Adaptive Generalized Advantage Estimate: Critic-Aware Refinements},
-  author={Mohammadpour, Naemeh and Fozi, Meysam and Ebadzadeh, Mohammad Mehdi and Azimi, Ali and Kamali, Ali},
-  journal={Journal of Modeling in Mechanics},
-  year={2025},
-  publisher={University of Guilan}
-}
 ```
 
 ---
