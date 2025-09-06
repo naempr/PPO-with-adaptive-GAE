@@ -2,7 +2,7 @@
 # Author: Naemeh Mohammadpour (2025)
 # Based on the original CleanRL implementation:
 # https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/ppo_continuous_action.py
-# 
+#
 # Copyright (c) 2021 CleanRL Authors
 # Modifications Copyright (c) 2025 Naemeh Mohammadpour
 # Licensed under the MIT License
@@ -83,6 +83,8 @@ class Args:
     target_kl: float = None
     """the target KL divergence threshold"""
     policy_frequency: int = 2
+    """update policy every PF-th epoch"""
+
     # to be filled in runtime
     batch_size: int = 0
     """the batch size (computed in runtime)"""
@@ -90,10 +92,13 @@ class Args:
     """the mini-batch size (computed in runtime)"""
     num_iterations: int = 0
     """the number of iterations (computed in runtime)"""
-    m: int = 0.09
+
+    # Adaptive GAE helpers
+    m: float = 0.09
     """Initial gae_lambda_delta"""
-    previous_v_loss: float = float('inf')
+    previous_v_loss: float = float("inf")
     """Initial value loss for comparison"""
+
 
 def make_env(env_id, idx, capture_video, run_name, gamma):
     def thunk():
@@ -151,6 +156,7 @@ class Agent(nn.Module):
             action = probs.sample()
         return action, probs.log_prob(action).sum(1), probs.entropy().sum(1), self.critic(x)
 
+
 program_start_time = time.time()
 if __name__ == "__main__":
     args = tyro.cli(Args)
@@ -176,7 +182,7 @@ if __name__ == "__main__":
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
     )
 
-    # TRY NOT TO MODIFY: seeding
+    # Seeding
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -193,7 +199,7 @@ if __name__ == "__main__":
     agent = Agent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
-    # ALGO Logic: Storage setup
+    # Storage
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
     actions = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
     logprobs = torch.zeros((args.num_steps, args.num_envs)).to(device)
@@ -201,34 +207,32 @@ if __name__ == "__main__":
     dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
     values = torch.zeros((args.num_steps, args.num_envs)).to(device)
 
-    # TRY NOT TO MODIFY: start the game
+    # Run
     global_step = 0
     start_time = time.time()
     next_obs, _ = envs.reset(seed=args.seed)
     next_obs = torch.Tensor(next_obs).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
-   
+
     for iteration in range(1, args.num_iterations + 1):
-        # Annealing the rate if instructed to do so.
-        print(f"Update {iteration}: gae_lambda = {args.gae_lambda}")
+        # LR annealing
         if args.anneal_lr:
             frac = 1.0 - (iteration - 1.0) / args.num_iterations
             lrnow = frac * args.learning_rate
             optimizer.param_groups[0]["lr"] = lrnow
 
+        # Rollout
         for step in range(0, args.num_steps):
             global_step += args.num_envs
             obs[step] = next_obs
             dones[step] = next_done
 
-            # ALGO LOGIC: action logic
             with torch.no_grad():
                 action, logprob, _, value = agent.get_action_and_value(next_obs)
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
 
-            # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
             next_done = np.logical_or(terminations, truncations)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
@@ -241,7 +245,7 @@ if __name__ == "__main__":
                         writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                         writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
 
-        # bootstrap value if not done
+        # bootstrap value if not done + GAE
         with torch.no_grad():
             next_value = agent.get_value(next_obs).reshape(1, -1)
             advantages = torch.zeros_like(rewards).to(device)
@@ -268,84 +272,106 @@ if __name__ == "__main__":
         # Optimizing the policy and value network
         b_inds = np.arange(args.batch_size)
         clipfracs = []
+        
+        last_pg_loss = torch.tensor(0.0, device=device)
+        last_entropy = torch.tensor(0.0, device=device)
+        last_old_approx_kl = torch.tensor(0.0, device=device)
+        last_approx_kl = torch.tensor(0.0, device=device)
+
         for epoch in range(args.update_epochs):
             np.random.shuffle(b_inds)
+            do_policy = (epoch % args.policy_frequency == 0)
+            did_policy_in_epoch = False
+
             for start in range(0, args.batch_size, args.minibatch_size):
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
 
-                # Update critic every step
-                _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions[mb_inds])
-                logratio = newlogprob - b_logprobs[mb_inds]
-                ratio = logratio.exp()
+                
+                newvalue = agent.get_value(b_obs[mb_inds]).view(-1)
 
-                # Approximate KL and clip fraction calculation
-                with torch.no_grad():
-                    old_approx_kl = (-logratio).mean()
-                    approx_kl = ((ratio - 1) - logratio).mean()
-                    clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
+              
+                if do_policy:
+                    _, newlogprob, entropy, _ = agent.get_action_and_value(b_obs[mb_inds], b_actions[mb_inds])
+                    logratio = newlogprob - b_logprobs[mb_inds]
+                    ratio = logratio.exp()
 
-                # Critic loss calculations
-                newvalue = newvalue.view(-1)
+                    # KL / clipfrac فقط در policy-epoch
+                    with torch.no_grad():
+                        old_approx_kl = (-logratio).mean()
+                        approx_kl = ((ratio - 1) - logratio).mean()
+                        clipfracs.append(((ratio - 1.0).abs() > args.clip_coef).float().mean().item())
+
+                
                 if args.clip_vloss:
                     v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-                    v_clipped = b_values[mb_inds] + torch.clamp(newvalue - b_values[mb_inds], -args.clip_coef, args.clip_coef)
+                    v_clipped = b_values[mb_inds] + torch.clamp(newvalue - b_values[mb_inds],
+                                                               -args.clip_coef, args.clip_coef)
                     v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
                     v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
                 else:
                     v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
                 
-                # Entropy loss
-                entropy_loss = entropy.mean()
-
-                # PPO with Policy Update Delay
-                if epoch % args.policy_frequency == 0:
-                    # Policy loss calculations
-                    mb_advantages = b_advantages[mb_inds]
+ 
+                if do_policy:
+                    mb_adv = b_advantages[mb_inds]
                     if args.norm_adv:
-                        mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
-                    pg_loss1 = -mb_advantages * ratio
-                    pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
-                    pg_loss = torch.max(pg_loss1, pg_loss2).mean()
-                    # Total loss for policy update
-                    loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                        mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
 
-                    # Backprop for policy
+                    pg_loss1 = -mb_adv * ratio
+                    pg_loss2 = -mb_adv * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
+                    pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+                    entropy_loss = entropy.mean()
+
                     optimizer.zero_grad()
-                    pg_loss.backward()
+                    # apply entropy regularization in actor gradients
+                    actor_loss = pg_loss - args.ent_coef * entropy_loss
+                    actor_loss.backward()
+                    if args.max_grad_norm is not None and args.max_grad_norm > 0:
+                        nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                     optimizer.step()
 
-                # Critic update (backprop)
+          
+
+                    
+                    last_pg_loss = pg_loss.detach()
+                    last_entropy = entropy_loss.detach()
+                    last_old_approx_kl = old_approx_kl.detach()
+                    last_approx_kl = approx_kl.detach()
+                    did_policy_in_epoch = True
+
+                
                 optimizer.zero_grad()
                 v_loss.backward()
+                if args.max_grad_norm is not None and args.max_grad_norm > 0:
+                    nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
 
-
-               
-
-            if args.target_kl is not None and approx_kl > args.target_kl:
+            # early stopping بر اساس KL فقط وقتی policy آپدیت شده
+            if args.target_kl is not None and did_policy_in_epoch and last_approx_kl > args.target_kl:
                 break
-  
-        #PPO with adaptive GAE
-        m= 0.090 - (0.085 * global_step / args.total_timesteps)
+
+        # Adaptive GAE (O(1) per-iteration)
+        m = 0.090 - (0.085 * global_step / args.total_timesteps)
         if v_loss.item() < args.previous_v_loss:
             args.gae_lambda = max(0.700, args.gae_lambda - m)
         elif v_loss.item() > args.previous_v_loss:
             args.gae_lambda = min(0.99, args.gae_lambda + m)
         args.previous_v_loss = v_loss.item()
 
+        # explained variance
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 
-        # TRY NOT TO MODIFY: record rewards for plotting purposes
+        # Logging
         writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
         writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
-        writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
-        writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
-        writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
-        writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
-        writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
+        writer.add_scalar("losses/policy_loss", last_pg_loss.item(), global_step)
+        writer.add_scalar("losses/entropy", last_entropy.item(), global_step)
+        writer.add_scalar("losses/old_approx_kl", last_old_approx_kl.item(), global_step)
+        writer.add_scalar("losses/approx_kl", last_approx_kl.item(), global_step)
+        writer.add_scalar("losses/clipfrac", float(np.mean(clipfracs)) if len(clipfracs) > 0 else 0.0, global_step)
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
